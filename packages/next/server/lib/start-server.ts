@@ -1,49 +1,72 @@
+import type { NextServerOptions, NextServer, RequestHandler } from '../next'
+import { warn } from '../../build/output/log'
 import http from 'http'
 import next from '../next'
-import { warn } from '../../build/output/log'
 
-export default async function start(
-  serverOptions: any,
-  port?: number,
-  hostname?: string
-) {
-  let requestHandler: ReturnType<typeof app.getRequestHandler>
-  const srv = http.createServer((req, res) => {
+interface StartServerOptions extends NextServerOptions {
+  allowRetry?: boolean
+  keepAliveTimeout?: number
+}
+
+export function startServer(opts: StartServerOptions) {
+  let requestHandler: RequestHandler
+
+  const server = http.createServer((req, res) => {
     return requestHandler(req, res)
   })
-  const app = next({
-    ...serverOptions,
-    customServer: false,
-    httpServer: srv,
-  })
-  requestHandler = app.getRequestHandler()
 
-  await new Promise<void>((resolve, reject) => {
+  if (opts.keepAliveTimeout) {
+    server.keepAliveTimeout = opts.keepAliveTimeout
+  }
+
+  return new Promise<NextServer>((resolve, reject) => {
+    let port = opts.port
     let retryCount = 0
-    srv.on('error', (err: NodeJS.ErrnoException) => {
-      // This code catches EADDRINUSE error if the port is already in use
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
       if (
-        err.code === 'EADDRINUSE' &&
-        serverOptions.allowRetry &&
         port &&
+        opts.allowRetry &&
+        err.code === 'EADDRINUSE' &&
         retryCount < 10
       ) {
         warn(`Port ${port} is in use, trying ${port + 1} instead.`)
         port += 1
         retryCount += 1
-        srv.listen(port, hostname)
+        server.listen(port, opts.hostname)
       } else {
         reject(err)
       }
     })
-    srv.on('listening', () => resolve())
-    srv.listen(port, hostname)
+
+    let upgradeHandler: any
+
+    if (!opts.dev) {
+      server.on('upgrade', (req, socket, upgrade) => {
+        upgradeHandler(req, socket, upgrade)
+      })
+    }
+
+    server.on('listening', () => {
+      const addr = server.address()
+      const hostname =
+        !opts.hostname || opts.hostname === '0.0.0.0'
+          ? 'localhost'
+          : opts.hostname
+
+      const app = next({
+        ...opts,
+        hostname,
+        customServer: false,
+        httpServer: server,
+        port: addr && typeof addr === 'object' ? addr.port : port,
+      })
+
+      requestHandler = app.getRequestHandler()
+      upgradeHandler = app.getUpgradeHandler()
+      resolve(app)
+    })
+
+    server.listen(port, opts.hostname)
   })
-  // It's up to caller to run `app.prepare()`, so it can notify that the server
-  // is listening before starting any intensive operations.
-  const addr = srv.address()
-  return {
-    app,
-    actualPort: addr && typeof addr === 'object' ? addr.port : port,
-  }
 }

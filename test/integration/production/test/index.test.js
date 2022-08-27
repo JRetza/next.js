@@ -26,6 +26,7 @@ import dynamicImportTests from './dynamic'
 import processEnv from './process-env'
 import security from './security'
 import { promisify } from 'util'
+import { error } from 'console'
 
 const glob = promisify(globOriginal)
 
@@ -38,29 +39,103 @@ const context = {}
 describe('Production Usage', () => {
   let output = ''
   beforeAll(async () => {
-    const result = await nextBuild(appDir, undefined, {
+    let opts = {
       stderr: true,
       stdout: true,
-    })
+    }
+    if (process.env.TEST_WASM) {
+      opts.env = {
+        NODE_OPTIONS: '--no-addons',
+      }
+    }
+    const result = await nextBuild(appDir, undefined, opts)
 
     appPort = await findPort()
     context.appPort = appPort
-    app = await nextStart(appDir, appPort)
+    app = await nextStart(appDir, appPort, { cwd: appDir })
     output = (result.stderr || '') + (result.stdout || '')
-    console.log(output)
 
     if (result.code !== 0) {
+      error(output)
       throw new Error(`Failed to build, exited with code ${result.code}`)
+    } else {
+      // Note: jest captures calls to console and only emits when there's assertion fails,
+      // so this won't log anything for normal test execution path.
+      console.log(output)
     }
   })
   afterAll(async () => {
     await killApp(app)
   })
 
+  it('should navigate through history after query update', async () => {
+    const browser = await webdriver(appPort, '/')
+    await browser.eval('window.next.router.push("/about?a=b")')
+    await browser.waitForElementByCss('.about-page')
+    await browser.waitForCondition(`!!window.next.router.isReady`)
+
+    await browser.refresh()
+    await browser.waitForCondition(`!!window.next.router.isReady`)
+    await browser.back()
+    await browser.waitForElementByCss('.index-page')
+    await browser.forward()
+    await browser.waitForElementByCss('.about-page')
+    await browser.back()
+    await browser.waitForElementByCss('.index-page')
+    await browser.refresh()
+    await browser.waitForCondition(`!!window.next.router.isReady`)
+    await browser.forward()
+    await browser.waitForElementByCss('.about-page')
+  })
+
+  if (process.env.BROWSER_NAME !== 'safari') {
+    it.each([
+      { hash: '#hello?' },
+      { hash: '#?' },
+      { hash: '##' },
+      { hash: '##?' },
+      { hash: '##hello?' },
+      { hash: '##hello' },
+      { hash: '#hello?world' },
+      { search: '?hello=world', hash: '#a', query: { hello: 'world' } },
+      { search: '?hello', hash: '#a', query: { hello: '' } },
+      { search: '?hello=', hash: '#a', query: { hello: '' } },
+    ])(
+      'should handle query/hash correctly during query updating $hash $search',
+      async ({ hash, search, query }) => {
+        const browser = await webdriver(
+          appPort,
+          `/${search || ''}${hash || ''}`
+        )
+
+        await check(
+          () =>
+            browser.eval('window.next.router.isReady ? "ready" : "not ready"'),
+          'ready'
+        )
+        expect(await browser.eval('window.location.pathname')).toBe('/')
+        expect(await browser.eval('window.location.hash')).toBe(hash || '')
+        expect(await browser.eval('window.location.search')).toBe(search || '')
+        expect(await browser.eval('next.router.pathname')).toBe('/')
+        expect(
+          JSON.parse(await browser.eval('JSON.stringify(next.router.query)'))
+        ).toEqual(query || {})
+      }
+    )
+  }
+
   it('should not show target deprecation warning', () => {
     expect(output).not.toContain(
       'The `target` config is deprecated and will be removed in a future version'
     )
+  })
+
+  it('should respond with 405 for POST to static page', async () => {
+    const res = await fetchViaHTTP(appPort, '/', undefined, {
+      method: 'POST',
+    })
+    expect(res.status).toBe(405)
+    expect(await res.text()).toContain('Method Not Allowed')
   })
 
   it('should contain generated page count in output', async () => {
@@ -81,12 +156,27 @@ describe('Production Usage', () => {
     expect(serverTrace.version).toBe(1)
     expect(
       serverTrace.files.some((file) =>
-        file.includes('next/dist/server/send-payload.js')
+        file.includes('next/dist/server/send-payload/index.js')
       )
     ).toBe(true)
+    const repoRoot = join(__dirname, '../../../../')
+    expect(
+      serverTrace.files.some((file) => {
+        const fullPath = join(__dirname, '../.next', file)
+        if (!fullPath.startsWith(repoRoot)) {
+          console.error(`Found next-server trace file outside repo root`, {
+            repoRoot,
+            fullPath,
+            file,
+          })
+          return true
+        }
+        return false
+      })
+    ).toBe(false)
     expect(
       serverTrace.files.some((file) =>
-        file.includes('next/dist/server/normalize-page-path.js')
+        file.includes('next/dist/shared/lib/page-path/normalize-page-path.js')
       )
     ).toBe(true)
     expect(
@@ -120,7 +210,7 @@ describe('Production Usage', () => {
           /node_modules\/react\/package\.json/,
           /node_modules\/react\/cjs\/react\.production\.min\.js/,
         ],
-        notTests: [/\0/],
+        notTests: [/\0/, /\?/, /!/],
       },
       {
         page: '/client-error',
@@ -132,12 +222,10 @@ describe('Production Usage', () => {
           /node_modules\/react\/cjs\/react\.production\.min\.js/,
           /node_modules\/next/,
           /next\/link\.js/,
-          /next\/dist\/client\/link\.js/,
           /next\/dist\/shared\/lib\/router\/utils\/resolve-rewrites\.js/,
-          /next\/dist\/pages\/_error\.js/,
           /next\/error\.js/,
         ],
-        notTests: [/\0/],
+        notTests: [/\0/, /\?/, /!/],
       },
       {
         page: '/dynamic',
@@ -149,10 +237,9 @@ describe('Production Usage', () => {
           /node_modules\/react\/cjs\/react\.production\.min\.js/,
           /node_modules\/next/,
           /next\/link\.js/,
-          /next\/dist\/client\/link\.js/,
           /next\/dist\/shared\/lib\/router\/utils\/resolve-rewrites\.js/,
         ],
-        notTests: [/\0/],
+        notTests: [/\0/, /\?/, /!/],
       },
       {
         page: '/index',
@@ -164,13 +251,18 @@ describe('Production Usage', () => {
           /node_modules\/react\/cjs\/react\.production\.min\.js/,
           /node_modules\/next/,
           /next\/link\.js/,
-          /next\/dist\/client\/link\.js/,
           /next\/dist\/shared\/lib\/router\/utils\/resolve-rewrites\.js/,
           /node_modules\/nanoid\/index\.js/,
           /node_modules\/nanoid\/url-alphabet\/index\.js/,
           /node_modules\/es5-ext\/array\/#\/clear\.js/,
         ],
-        notTests: [/next\/dist\/pages\/_error\.js/, /next\/error\.js/, /\0/],
+        notTests: [
+          /next\/dist\/pages\/_error\.js/,
+          /next\/error\.js/,
+          /\0/,
+          /\?/,
+          /!/,
+        ],
       },
       {
         page: '/counter',
@@ -183,10 +275,9 @@ describe('Production Usage', () => {
           /node_modules\/react\/cjs\/react\.development\.js/,
           /node_modules\/next/,
           /next\/router\.js/,
-          /next\/dist\/client\/router\.js/,
           /next\/dist\/shared\/lib\/router\/utils\/resolve-rewrites\.js/,
         ],
-        notTests: [/\0/],
+        notTests: [/\0/, /\?/, /!/],
       },
       {
         page: '/next-import',
@@ -198,10 +289,48 @@ describe('Production Usage', () => {
           /node_modules\/react\/cjs\/react\.production\.min\.js/,
           /node_modules\/next/,
           /next\/link\.js/,
-          /next\/dist\/client\/link\.js/,
           /next\/dist\/shared\/lib\/router\/utils\/resolve-rewrites\.js/,
         ],
-        notTests: [/next\/dist\/server\/next\.js/, /next\/dist\/bin/, /\0/],
+        notTests: [
+          /next\/dist\/server\/next\.js/,
+          /next\/dist\/bin/,
+          /\0/,
+          /\?/,
+          /!/,
+        ],
+      },
+      {
+        page: '/api',
+        tests: [/webpack-runtime\.js/, /\/logo\.module\.css/],
+        notTests: [
+          /next\/dist\/server\/next\.js/,
+          /next\/dist\/bin/,
+          /\0/,
+          /\?/,
+          /!/,
+        ],
+      },
+      {
+        page: '/api/readfile-dirname',
+        tests: [/webpack-api-runtime\.js/, /static\/data\/item\.txt/],
+        notTests: [
+          /next\/dist\/server\/next\.js/,
+          /next\/dist\/bin/,
+          /\0/,
+          /\?/,
+          /!/,
+        ],
+      },
+      {
+        page: '/api/readfile-processcwd',
+        tests: [/webpack-api-runtime\.js/, /static\/data\/item\.txt/],
+        notTests: [
+          /next\/dist\/server\/next\.js/,
+          /next\/dist\/bin/,
+          /\0/,
+          /\?/,
+          /!/,
+        ],
       },
     ]
 
@@ -212,6 +341,7 @@ describe('Production Usage', () => {
       )
       const { version, files } = JSON.parse(contents)
       expect(version).toBe(1)
+      expect([...new Set(files)].length).toBe(files.length)
 
       expect(
         check.tests.every((item) => {
@@ -252,6 +382,24 @@ describe('Production Usage', () => {
     )
 
     expect(content).not.toContain('.currentScript')
+  })
+
+  it('should not contain amp, rsc APIs in main chunk', async () => {
+    const globResult = await glob('main-*.js', {
+      cwd: join(appDir, '.next/static/chunks'),
+    })
+
+    if (!globResult || globResult.length !== 1) {
+      throw new Error('could not find main js chunk')
+    }
+
+    const content = await fs.readFile(
+      join(appDir, '.next/static/chunks', globResult[0]),
+      'utf8'
+    )
+
+    expect(content).not.toContain('useAmp')
+    expect(content).not.toContain('useRefreshRoot')
   })
 
   describe('With basic usage', () => {
@@ -318,7 +466,9 @@ describe('Production Usage', () => {
       expect(res2.status).toBe(304)
     })
 
-    it('should allow etag header support with getServerSideProps', async () => {
+    // TODO: should we generate weak etags for streaming getServerSideProps?
+    // this is currently not expected to work with react-18
+    it.skip('should allow etag header support with getServerSideProps', async () => {
       const url = `http://localhost:${appPort}`
       const etag = (await fetchViaHTTP(url, '/fully-dynamic')).headers.get(
         'ETag'
@@ -356,7 +506,7 @@ describe('Production Usage', () => {
     it('should render 200 for POST on page', async () => {
       const res = await fetchViaHTTP(
         `http://localhost:${appPort}`,
-        '/about',
+        '/fully-dynamic',
         undefined,
         {
           method: 'POST',
@@ -568,6 +718,22 @@ describe('Production Usage', () => {
       expect(body).toEqual('API hello works')
     })
 
+    // Today, `__dirname` usage fails because Next.js moves the source file
+    // to .next/server/pages/api but it doesn't move the asset file.
+    // In the future, it would be nice to make `__dirname` work too.
+    it('does not work with pages/api/readfile-dirname.js', async () => {
+      const url = `http://localhost:${appPort}`
+      const res = await fetchViaHTTP(url, `/api/readfile-dirname`)
+      expect(res.status).toBe(500)
+    })
+
+    it('should work with pages/api/readfile-processcwd.js', async () => {
+      const url = `http://localhost:${appPort}`
+      const res = await fetchViaHTTP(url, `/api/readfile-processcwd`)
+      const body = await res.text()
+      expect(body).toBe('item')
+    })
+
     it('should work with dynamic params and search string', async () => {
       const url = `http://localhost:${appPort}`
       const res = await fetchViaHTTP(url, `/api/post-1?val=1`)
@@ -584,7 +750,7 @@ describe('Production Usage', () => {
         .elementByCss('a')
         .click()
         .waitForElementByCss('.about-page')
-        .elementByCss('div')
+        .elementByCss('.about-page')
         .text()
 
       expect(text).toBe('About Page')

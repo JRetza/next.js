@@ -31,11 +31,10 @@ import {
   onBuildError,
   onBuildOk,
   onRefresh,
-} from '@next/react-dev-overlay/lib/client'
+} from 'next/dist/compiled/@next/react-dev-overlay/dist/client'
 import stripAnsi from 'next/dist/compiled/strip-ansi'
-import { addMessageListener } from './websocket'
+import { addMessageListener, sendMessage } from './websocket'
 import formatWebpackMessages from './format-webpack-messages'
-import Router from 'next/router'
 
 // This alternative WebpackDevServer combines the functionality of:
 // https://github.com/webpack/webpack-dev-server/blob/webpack-1/client/index.js
@@ -45,6 +44,8 @@ import Router from 'next/router'
 // It makes some opinionated choices on top, like adding a syntax error overlay
 // that looks similar to our console output. The error overlay is inspired by:
 // https://github.com/glenjamin/webpack-hot-middleware
+
+window.__nextDevClientId = Math.round(Math.random() * 100 + Date.now())
 
 let hadRuntimeError = false
 let customHmrEventHandler
@@ -57,7 +58,7 @@ export default function connect() {
     try {
       processMessage(event)
     } catch (ex) {
-      console.warn('Invalid HMR message: ' + event.data + '\n' + ex)
+      console.warn('Invalid HMR message: ' + event.data + '\n', ex)
     }
   })
 
@@ -91,7 +92,7 @@ function handleSuccess() {
 
   const isHotUpdate =
     !isFirstCompilation ||
-    (Router.pathname !== '/_error' && isUpdateAvailable())
+    (window.__NEXT_DATA__.page !== '/_error' && isUpdateAvailable())
   isFirstCompilation = false
   hasCompileErrors = false
 
@@ -188,8 +189,17 @@ function onFastRefresh(hasUpdates) {
   }
 
   if (startLatency) {
-    const latency = Date.now() - startLatency
+    const endLatency = Date.now()
+    const latency = endLatency - startLatency
     console.log(`[Fast Refresh] done in ${latency}ms`)
+    sendMessage(
+      JSON.stringify({
+        event: 'client-hmr-latency',
+        id: window.__nextDevClientId,
+        startTime: startLatency,
+        endTime: endLatency,
+      })
+    )
     if (self.__NEXT_HMR_LATENCY_CB) {
       self.__NEXT_HMR_LATENCY_CB(latency)
     }
@@ -220,15 +230,45 @@ function processMessage(e) {
       const { errors, warnings } = obj
       const hasErrors = Boolean(errors && errors.length)
       if (hasErrors) {
+        sendMessage(
+          JSON.stringify({
+            event: 'client-error',
+            errorCount: errors.length,
+            clientId: window.__nextDevClientId,
+          })
+        )
         return handleErrors(errors)
       }
 
       const hasWarnings = Boolean(warnings && warnings.length)
       if (hasWarnings) {
+        sendMessage(
+          JSON.stringify({
+            event: 'client-warning',
+            warningCount: warnings.length,
+            clientId: window.__nextDevClientId,
+          })
+        )
         return handleWarnings(warnings)
       }
 
+      sendMessage(
+        JSON.stringify({
+          event: 'client-success',
+          clientId: window.__nextDevClientId,
+        })
+      )
       return handleSuccess()
+    }
+
+    case 'serverComponentChanges': {
+      sendMessage(
+        JSON.stringify({
+          event: 'server-component-reload-page',
+          clientId: window.__nextDevClientId,
+        })
+      )
+      return window.location.reload()
     }
     default: {
       if (customHmrEventHandler) {
@@ -296,7 +336,7 @@ function tryApplyUpdates(onHotUpdateSuccess) {
           '[Fast Refresh] performing full reload because your application had an unrecoverable error'
         )
       }
-      window.location.reload()
+      performFullReload(err)
       return
     }
 
@@ -331,4 +371,21 @@ function tryApplyUpdates(onHotUpdateSuccess) {
       handleApplyUpdates(err, null)
     }
   )
+}
+
+function performFullReload(err) {
+  const stackTrace =
+    err &&
+    ((err.stack && err.stack.split('\n').slice(0, 5).join('\n')) ||
+      err.message ||
+      err + '')
+
+  sendMessage(
+    JSON.stringify({
+      event: 'client-full-reload',
+      stackTrace,
+    })
+  )
+
+  window.location.reload()
 }

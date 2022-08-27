@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import arg from 'next/dist/compiled/arg/index.js'
-import startServer from '../server/lib/start-server'
+import { startServer } from '../server/lib/start-server'
 import { printAndExit } from '../server/lib/utils'
-import { cliCommand } from '../bin/next'
 import * as Log from '../build/output/log'
 import isError from '../lib/is-error'
 import { getProjectDir } from '../lib/get-project-dir'
+import { cliCommand } from '../lib/commands'
 
 const nextStart: cliCommand = (argv) => {
   const validArgs: arg.Spec = {
@@ -14,6 +14,7 @@ const nextStart: cliCommand = (argv) => {
     '--help': Boolean,
     '--port': Number,
     '--hostname': String,
+    '--keepAliveTimeout': Number,
 
     // Aliases
     '-h': '--help',
@@ -44,6 +45,7 @@ const nextStart: cliCommand = (argv) => {
       Options
         --port, -p      A port number on which to start the application
         --hostname, -H  Hostname on which to start the application (default: 0.0.0.0)
+        --keepAliveTimeout  Max milliseconds to wait before closing inactive connections
         --help, -h      Displays this message
     `)
     process.exit(0)
@@ -54,16 +56,36 @@ const nextStart: cliCommand = (argv) => {
     args['--port'] || (process.env.PORT && parseInt(process.env.PORT)) || 3000
   const host = args['--hostname'] || '0.0.0.0'
 
-  if (process.env.__NEXT_RAND_PORT) {
-    port = 0
+  if (process.env.__NEXT_FORCED_PORT) {
+    port = parseInt(process.env.__NEXT_FORCED_PORT, 10) || 0
   }
 
-  startServer({ dir }, port, host)
-    .then(async ({ app, actualPort }) => {
-      const appUrl = `http://${
-        host === '0.0.0.0' ? 'localhost' : host
-      }:${actualPort}`
-      Log.ready(`started server on ${host}:${actualPort}, url: ${appUrl}`)
+  const keepAliveTimeoutArg: number | undefined = args['--keepAliveTimeout']
+  if (
+    typeof keepAliveTimeoutArg !== 'undefined' &&
+    (Number.isNaN(keepAliveTimeoutArg) ||
+      !Number.isFinite(keepAliveTimeoutArg) ||
+      keepAliveTimeoutArg < 0)
+  ) {
+    printAndExit(
+      `Invalid --keepAliveTimeout, expected a non negative number but received "${keepAliveTimeoutArg}"`,
+      1
+    )
+  }
+
+  const keepAliveTimeout = keepAliveTimeoutArg
+    ? Math.ceil(keepAliveTimeoutArg)
+    : undefined
+
+  startServer({
+    dir,
+    hostname: host,
+    port,
+    keepAliveTimeout,
+  })
+    .then(async (app) => {
+      const appUrl = `http://${app.hostname}:${app.port}`
+      Log.ready(`started server on ${host}:${app.port}, url: ${appUrl}`)
       await app.prepare()
     })
     .catch((err) => {

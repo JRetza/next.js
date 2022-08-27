@@ -46,14 +46,15 @@ function getOriginModuleFromDependency(
 function getChunkGroupFromBlock(
   compilation: any,
   block: any
-): webpack.compilation.ChunkGroup {
+): webpack.Compilation['chunkGroups'] {
   return compilation.chunkGraph.getBlockChunkGroup(block)
 }
 
 function buildManifest(
   _compiler: webpack.Compiler,
-  compilation: webpack.compilation.Compilation,
-  pagesDir: string
+  compilation: webpack.Compilation,
+  pagesDir: string,
+  dev: boolean
 ) {
   let manifest: { [k: string]: { id: string | number; files: string[] } } = {}
 
@@ -108,7 +109,7 @@ function buildManifest(
         // the module id and no files
         if (chunkGroup) {
           for (const chunk of (chunkGroup as any)
-            .chunks as webpack.compilation.Chunk[]) {
+            .chunks as webpack.Compilation['chunks']) {
             chunk.files.forEach((file: string) => {
               if (
                 (file.endsWith('.js') || file.endsWith('.css')) &&
@@ -125,7 +126,7 @@ function buildManifest(
         // next/dynamic so they are loaded by the same technique
 
         // add the id and files to the manifest
-        const id = getModuleId(compilation, module)
+        const id = dev ? key : getModuleId(compilation, module)
         manifest[key] = { id, files: Array.from(files) }
       }
     }
@@ -146,19 +147,27 @@ export class ReactLoadablePlugin {
   private filename: string
   private pagesDir: string
   private runtimeAsset?: string
+  private dev: boolean
 
   constructor(opts: {
     filename: string
     pagesDir: string
     runtimeAsset?: string
+    dev: boolean
   }) {
     this.filename = opts.filename
     this.pagesDir = opts.pagesDir
     this.runtimeAsset = opts.runtimeAsset
+    this.dev = opts.dev
   }
 
   createAssets(compiler: any, compilation: any, assets: any) {
-    const manifest = buildManifest(compiler, compilation, this.pagesDir)
+    const manifest = buildManifest(
+      compiler,
+      compilation,
+      this.pagesDir,
+      this.dev
+    )
     // @ts-ignore: TODO: remove when webpack 5 is stable
     assets[this.filename] = new sources.RawSource(
       JSON.stringify(manifest, null, 2)

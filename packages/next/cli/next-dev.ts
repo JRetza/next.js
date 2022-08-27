@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import arg from 'next/dist/compiled/arg/index.js'
-import { existsSync } from 'fs'
-import startServer from '../server/lib/start-server'
+import { existsSync, watchFile } from 'fs'
+import { startServer } from '../server/lib/start-server'
 import { printAndExit } from '../server/lib/utils'
 import * as Log from '../build/output/log'
 import { startedDevelopmentServer } from '../build/output'
-import { cliCommand } from '../bin/next'
+import { cliCommand } from '../lib/commands'
 import isError from '../lib/is-error'
 import { getProjectDir } from '../lib/get-project-dir'
+import { CONFIG_FILES } from '../shared/lib/constants'
+import path from 'path'
 
 const nextDev: cliCommand = (argv) => {
   const validArgs: arg.Spec = {
@@ -34,7 +36,7 @@ const nextDev: cliCommand = (argv) => {
     console.log(`
       Description
         Starts the application in development mode (hot-code reloading, error
-        reporting, etc)
+        reporting, etc.)
 
       Usage
         $ next dev <dir> -p <port number>
@@ -80,24 +82,25 @@ const nextDev: cliCommand = (argv) => {
   // we allow the server to use a random port while testing
   // instead of attempting to find a random port and then hope
   // it doesn't become occupied before we leverage it
-  if (process.env.__NEXT_RAND_PORT) {
-    port = 0
+  if (process.env.__NEXT_FORCED_PORT) {
+    port = parseInt(process.env.__NEXT_FORCED_PORT, 10) || 0
   }
 
   // We do not set a default host value here to prevent breaking
   // some set-ups that rely on listening on other interfaces
   const host = args['--hostname']
 
-  startServer(
-    { dir, dev: true, isNextDevCommand: true, allowRetry },
+  startServer({
+    allowRetry,
+    dev: true,
+    dir,
+    hostname: host,
+    isNextDevCommand: true,
     port,
-    host
-  )
-    .then(async ({ app, actualPort }) => {
-      const appUrl = `http://${
-        !host || host === '0.0.0.0' ? 'localhost' : host
-      }:${actualPort}`
-      startedDevelopmentServer(appUrl, `${host || '0.0.0.0'}:${actualPort}`)
+  })
+    .then(async (app) => {
+      const appUrl = `http://${app.hostname}:${app.port}`
+      startedDevelopmentServer(appUrl, `${host || '0.0.0.0'}:${app.port}`)
       // Start preflight after server is listening and ignore errors:
       preflight().catch(() => {})
       // Finalize server bootup:
@@ -127,6 +130,16 @@ const nextDev: cliCommand = (argv) => {
       }
       process.nextTick(() => process.exit(1))
     })
+
+  for (const CONFIG_FILE of CONFIG_FILES) {
+    watchFile(path.join(dir, CONFIG_FILE), (cur: any, prev: any) => {
+      if (cur.size > 0 || prev.size > 0) {
+        console.log(
+          `\n> Found a change in ${CONFIG_FILE}. Restart the server to see the changes in effect.`
+        )
+      }
+    })
+  }
 }
 
 export { nextDev }

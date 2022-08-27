@@ -3,6 +3,7 @@
 import fs from 'fs-extra'
 import { join } from 'path'
 import cheerio from 'cheerio'
+import * as path from 'path'
 import {
   renderViaHTTP,
   findPort,
@@ -10,7 +11,9 @@ import {
   nextBuild,
   killApp,
   check,
+  File,
 } from 'next-test-utils'
+import * as JSON5 from 'json5'
 
 const appDir = join(__dirname, '..')
 let appPort
@@ -21,7 +24,7 @@ async function get$(path, query) {
   return cheerio.load(html)
 }
 
-describe('TypeScript Features', () => {
+function runTests() {
   describe('default behavior', () => {
     let output = ''
 
@@ -110,25 +113,61 @@ describe('TypeScript Features', () => {
         singleAliasTrace.files.some((file) =>
           file.includes('components/hello.js')
         )
-      ).toBe(true)
+      ).toBe(false)
       expect(
         wildcardAliasTrace.files.some((file) =>
           file.includes('mypackage/myfile.js')
         )
       ).toBe(true)
       expect(
+        wildcardAliasTrace.files.some((file) =>
+          file.includes('mypackage/data.js')
+        )
+      ).toBe(false)
+      expect(
         resolveOrderTrace.files.some((file) => file.includes('lib/a/api.js'))
+      ).toBe(false)
+      expect(
+        resolveOrderTrace.files.some((file) =>
+          file.includes('mypackage/data.js')
+        )
       ).toBe(true)
       expect(
         resolveFallbackTrace.files.some((file) =>
           file.includes('lib/b/b-only.js')
         )
-      ).toBe(true)
+      ).toBe(false)
       expect(
         basicAliasTrace.files.some((file) =>
           file.includes('components/world.js')
         )
-      ).toBe(true)
+      ).toBe(false)
     })
   })
+}
+
+describe('jsconfig paths', () => {
+  runTests()
+})
+
+const jsconfig = new File(path.resolve(__dirname, '../jsconfig.json'))
+
+describe('jsconfig paths without baseurl', () => {
+  beforeAll(() => {
+    const jsconfigContent = JSON5.parse(jsconfig.originalContent)
+    delete jsconfigContent.compilerOptions.baseUrl
+    jsconfigContent.compilerOptions.paths = {
+      '@c/*': ['./components/*'],
+      '@lib/*': ['./lib/a/*', './lib/b/*'],
+      '@mycomponent': ['./components/hello.js'],
+      '*': ['./node_modules/*'],
+    }
+    jsconfig.write(JSON.stringify(jsconfigContent, null, 2))
+  })
+
+  afterAll(() => {
+    jsconfig.restore()
+  })
+
+  runTests()
 })

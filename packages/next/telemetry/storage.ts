@@ -1,4 +1,4 @@
-import chalk from 'chalk'
+import chalk from 'next/dist/compiled/chalk'
 import Conf from 'next/dist/compiled/conf'
 import { BinaryLike, createHash, randomBytes } from 'crypto'
 import isDockerFunction from 'next/dist/compiled/is-docker'
@@ -43,6 +43,16 @@ type RecordObject = {
   isRejected: boolean
   value?: any
   reason?: any
+}
+
+function getStorageDirectory(distDir: string): string | undefined {
+  const isLikelyEphemeral = ciEnvironment.isCI || isDockerFunction()
+
+  if (isLikelyEphemeral) {
+    return path.join(distDir, 'cache')
+  }
+
+  return undefined
 }
 
 export class Telemetry {
@@ -243,14 +253,4 @@ export class Telemetry {
       })) as Array<EventBatchShape>,
     })
   }
-}
-
-function getStorageDirectory(distDir: string): string | undefined {
-  const isLikelyEphemeral = ciEnvironment.isCI || isDockerFunction()
-
-  if (isLikelyEphemeral) {
-    return path.join(distDir, 'cache')
-  }
-
-  return undefined
 }

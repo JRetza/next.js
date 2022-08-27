@@ -1,4 +1,4 @@
-import { Worker } from 'jest-worker'
+import { Worker } from 'next/dist/compiled/jest-worker'
 import * as path from 'path'
 import { execOnce } from '../../../shared/lib/utils'
 import { cpus } from 'os'
@@ -9,7 +9,11 @@ type RotateOperation = {
 }
 type ResizeOperation = {
   type: 'resize'
-} & ({ width: number; height?: never } | { height: number; width?: never })
+} & (
+  | { width: number; height?: never }
+  | { height: number; width?: never }
+  | { width: number; height: number }
+)
 export type Operation = RotateOperation | ResizeOperation
 export type Encoding = 'jpeg' | 'png' | 'webp' | 'avif'
 
@@ -37,24 +41,24 @@ export async function processBuffer(
     if (operation.type === 'rotate') {
       imageData = await worker.rotate(imageData, operation.numRotations)
     } else if (operation.type === 'resize') {
+      const opt = { image: imageData, width: 0, height: 0 }
       if (
         operation.width &&
         imageData.width &&
         imageData.width > operation.width
       ) {
-        imageData = await worker.resize({
-          image: imageData,
-          width: operation.width,
-        })
-      } else if (
+        opt.width = operation.width
+      }
+      if (
         operation.height &&
         imageData.height &&
         imageData.height > operation.height
       ) {
-        imageData = await worker.resize({
-          image: imageData,
-          height: operation.height,
-        })
+        opt.height = operation.height
+      }
+
+      if (opt.width > 0 || opt.height > 0) {
+        imageData = await worker.resize(opt)
       }
     }
   }
@@ -65,7 +69,12 @@ export async function processBuffer(
     case 'webp':
       return Buffer.from(await worker.encodeWebp(imageData, { quality }))
     case 'avif':
-      return Buffer.from(await worker.encodeAvif(imageData, { quality }))
+      const avifQuality = quality - 20
+      return Buffer.from(
+        await worker.encodeAvif(imageData, {
+          quality: Math.max(avifQuality, 0),
+        })
+      )
     case 'png':
       return Buffer.from(await worker.encodePng(imageData))
     default:

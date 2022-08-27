@@ -1,4 +1,4 @@
-import chalk from 'chalk'
+import chalk from 'next/dist/compiled/chalk'
 import path from 'path'
 
 // eslint-disable-next-line no-shadow
@@ -100,6 +100,7 @@ export function formatResults(
   format: (r: LintResult[]) => string
 ): {
   output: string
+  outputWithMessages: string
   totalNextPluginErrorCount: number
   totalNextPluginWarningCount: number
 } {
@@ -124,7 +125,8 @@ export function formatResults(
         .join('\n')
 
   return {
-    output:
+    output: output,
+    outputWithMessages:
       resultsWithMessages.length > 0
         ? output +
           `\n\n${chalk.cyan(

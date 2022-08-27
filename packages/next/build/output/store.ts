@@ -1,8 +1,7 @@
 import createStore from 'next/dist/compiled/unistore'
 import stripAnsi from 'next/dist/compiled/strip-ansi'
 import { flushAllTraces } from '../../trace'
-import { getUnresolvedModuleFromError } from '../utils'
-
+import { teardownCrashReporter, teardownTraceSubscriber } from '../swc'
 import * as Log from './log'
 
 export type OutputState =
@@ -15,11 +14,11 @@ export type OutputState =
       | {
           loading: false
           typeChecking: boolean
-          partial: 'client' | 'server' | 'serverWeb' | undefined
+          partial: 'client and server' | undefined
           modules: number
           errors: string[] | null
           warnings: string[] | null
-          hasServerWeb: boolean
+          hasEdgeServer: boolean
         }
     ))
 
@@ -56,17 +55,20 @@ store.subscribe((state) => {
     if (state.appUrl) {
       Log.ready(`started server on ${state.bindAddr}, url: ${state.appUrl}`)
     }
-    if (startTime === 0) startTime = Date.now()
     return
   }
 
   if (state.loading) {
     if (state.trigger) {
-      Log.wait(`compiling ${state.trigger}...`)
+      if (state.trigger !== 'initial') {
+        Log.wait(`compiling ${state.trigger}...`)
+      }
     } else {
       Log.wait('compiling...')
     }
-    if (startTime === 0) startTime = Date.now()
+    if (startTime === 0) {
+      startTime = Date.now()
+    }
     return
   }
 
@@ -78,7 +80,7 @@ store.subscribe((state) => {
       const matches = cleanError.match(/\[.*\]=/)
       if (matches) {
         for (const match of matches) {
-          const prop = (match.split(']').shift() || '').substr(1)
+          const prop = (match.split(']').shift() || '').slice(1)
           console.log(
             `AMP bind syntax [${prop}]='' is not supported in JSX, use 'data-amp-bind-${prop}' instead. https://nextjs.org/docs/messages/amp-bind-jsx-alt`
           )
@@ -86,17 +88,11 @@ store.subscribe((state) => {
         return
       }
     }
-
-    const moduleName = getUnresolvedModuleFromError(cleanError)
-    if (state.hasServerWeb && moduleName) {
-      console.error(
-        `Native Node.js APIs are not supported in the Edge Runtime with \`concurrentFeatures\` enabled. Found \`${moduleName}\` imported.\n`
-      )
-      return
-    }
-
+    startTime = 0
     // Ensure traces are flushed after each compile in development mode
     flushAllTraces()
+    teardownTraceSubscriber()
+    teardownCrashReporter()
     return
   }
 
@@ -123,6 +119,8 @@ store.subscribe((state) => {
     Log.warn(state.warnings.join('\n\n'))
     // Ensure traces are flushed after each compile in development mode
     flushAllTraces()
+    teardownTraceSubscriber()
+    teardownCrashReporter()
     return
   }
 
@@ -138,4 +136,6 @@ store.subscribe((state) => {
   )
   // Ensure traces are flushed after each compile in development mode
   flushAllTraces()
+  teardownTraceSubscriber()
+  teardownCrashReporter()
 })
