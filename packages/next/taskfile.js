@@ -86,6 +86,8 @@ const externals = {
     'next/dist/build/webpack/plugins/terser-webpack-plugin',
 
   // TODO: Add @swc/helpers to externals once @vercel/ncc switch to swc-loader
+
+  undici: 'undici',
 }
 // eslint-disable-next-line camelcase
 externals['node-html-parser'] = 'next/dist/compiled/node-html-parser'
@@ -165,6 +167,14 @@ export async function ncc_node_fetch(task, opts) {
     .source(opts.src || relative(__dirname, require.resolve('node-fetch')))
     .ncc({ packageName: 'node-fetch', externals })
     .target('compiled/node-fetch')
+}
+
+externals['undici'] = 'next/dist/compiled/undici'
+export async function ncc_undici(task, opts) {
+  await task
+    .source(opts.src || relative(__dirname, require.resolve('undici')))
+    .ncc({ packageName: 'undici', externals })
+    .target('compiled/undici')
 }
 
 // eslint-disable-next-line camelcase
@@ -1447,6 +1457,7 @@ export async function copy_react_server_dom_webpack(task, opts) {
   await task
     .source(require.resolve('react-server-dom-webpack'))
     .target('compiled/react-server-dom-webpack')
+
   await task
     .source(
       join(
@@ -1623,8 +1634,15 @@ export async function ncc_unistore(task, opts) {
 externals['web-vitals'] = 'next/dist/compiled/web-vitals'
 export async function ncc_web_vitals(task, opts) {
   await task
-    .source(opts.src || relative(__dirname, require.resolve('web-vitals')))
-    .ncc({ packageName: 'web-vitals', externals, target: 'es5' })
+    .source(
+      opts.src ||
+        relative(
+          __dirname,
+          resolve(resolveFrom(__dirname, 'web-vitals'), '../web-vitals.js')
+        )
+    )
+    // web-vitals@3.0.0 is pure ESM, compile to CJS for pre-compiled
+    .ncc({ packageName: 'web-vitals', externals, target: 'es5', esm: false })
     .target('compiled/web-vitals')
 }
 // eslint-disable-next-line camelcase
@@ -1810,6 +1828,7 @@ export async function ncc(task, opts) {
         'ncc_get_orientation',
         'ncc_hapi_accept',
         'ncc_node_fetch',
+        'ncc_undici',
         'ncc_acorn',
         'ncc_amphtml_validator',
         'ncc_arg',
@@ -1976,6 +1995,12 @@ export async function server(task, opts) {
     .source(opts.src || 'server/**/*.+(js|ts|tsx)')
     .swc('server', { dev: opts.dev })
     .target('dist/server')
+
+  await fs.copyFile(
+    join(__dirname, 'server/google-font-metrics.json'),
+    join(__dirname, 'dist/server/google-font-metrics.json')
+  )
+
   notify('Compiled server files')
 }
 
@@ -2077,12 +2102,12 @@ export default async function (task) {
   await task.watch('telemetry/**/*.+(js|ts|tsx)', 'telemetry', opts)
   await task.watch('trace/**/*.+(js|ts|tsx)', 'trace', opts)
   await task.watch(
-    'shared/lib/{amp,config,constants,dynamic,head}.+(js|ts|tsx)',
+    'shared/lib/{amp,config,constants,dynamic,head,runtime-config}.+(js|ts|tsx)',
     'shared_re_exported',
     opts
   )
   await task.watch(
-    'shared/**/!(amp|config|constants|dynamic|head).+(js|ts|tsx)',
+    'shared/**/!(amp|config|constants|dynamic|head|runtime-config).+(js|ts|tsx)',
     'shared',
     opts
   )
@@ -2097,7 +2122,8 @@ export default async function (task) {
 export async function shared(task, opts) {
   await task
     .source(
-      opts.src || 'shared/**/!(amp|config|constants|dynamic|head).+(js|ts|tsx)'
+      opts.src ||
+        'shared/**/!(amp|config|constants|dynamic|head|runtime-config).+(js|ts|tsx)'
     )
     .swc('client', { dev: opts.dev })
     .target('dist/shared')
@@ -2107,7 +2133,8 @@ export async function shared(task, opts) {
 export async function shared_re_exported(task, opts) {
   await task
     .source(
-      opts.src || 'shared/**/{amp,config,constants,dynamic,head}.+(js|ts|tsx)'
+      opts.src ||
+        'shared/**/{amp,config,constants,dynamic,head,runtime-config}.+(js|ts|tsx)'
     )
     .swc('client', { dev: opts.dev, interopClientDefaultExport: true })
     .target('dist/shared')
